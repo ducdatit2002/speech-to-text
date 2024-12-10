@@ -1,0 +1,11 @@
+transformers>=4.30.0
+huggingface_hub
+soundfile
+datasets
+pyctcdecode
+git+https://github.com/kpu/kenlm.git
+playsound
+streamlit
+streamlit-webrtc
+
+
