@@ -20,8 +20,13 @@ pip install -r requirements.txt
 ```bash
 pip install streamlit transformers soundfile librosa numpy pyctcdecode kenlm huggingface_hub
 ```
+1. Tạo script từ mp3 (full đoạn)
 ```bash
 python main.py --audio demo1h.mp3
+```
+2. Tạo script từ mp3 (có phân đoạn diarization)
+```bash
+python diarization.py --audio demo1h.mp3 --num_speakers 2
 ```
 ```bash
 streamlit run app.py
