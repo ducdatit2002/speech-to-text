@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Vietnamese end-to-end speech recognition using wav2vec 2.0
-with automatic speaker diarization.
+Vietnamese End-to-End Speech Recognition using wav2vec 2.0
+with Automatic Speaker Diarization using pyannote.audio.
 """
 
 import os
@@ -16,6 +16,7 @@ import argparse
 import numpy as np
 import librosa
 from pyannote.audio import Pipeline
+
 
 def load_model_and_tokenizer(cache_dir='./cache/'):
     print("Loading processor and model...")
@@ -46,9 +47,10 @@ def load_model_and_tokenizer(cache_dir='./cache/'):
     print("Processor, model, and language model loaded successfully.")
     return processor, model, lm_file
 
-def get_decoder_ngram_model(_tokenizer, ngram_lm_path):
+
+def get_decoder_ngram_model(tokenizer, ngram_lm_path):
     print("Building decoder with n-gram language model...")
-    vocab_dict = _tokenizer.get_vocab()
+    vocab_dict = tokenizer.get_vocab()
     sorted_vocab = sorted((value, key) for (key, value) in vocab_dict.items())
     vocab_list = [token for _, token in sorted_vocab][:-2]  # Exclude special tokens
 
@@ -57,6 +59,7 @@ def get_decoder_ngram_model(_tokenizer, ngram_lm_path):
     decoder = BeamSearchDecoderCTC(alphabet, language_model=LanguageModel(lm_model))
     print("Decoder built successfully.")
     return decoder
+
 
 def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
     if speech_chunk.ndim > 1:
@@ -76,8 +79,6 @@ def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
         # Pad with zeros (silence) to reach minimum length
         padding = MIN_SAMPLES - len(speech_chunk)
         speech_chunk = np.pad(speech_chunk, (0, padding), 'constant')
-        # Optionally, you can skip padding and return an empty string
-        # return ""
 
     input_values = processor(
         speech_chunk, sampling_rate=sampling_rate, return_tensors="pt"
@@ -92,45 +93,46 @@ def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
     )
     return beam_search_output
 
+
 def automatic_speaker_diarization(audio_file):
     """
-    Perform speaker diarization using pyannote.audio's pre-trained pipeline.
-    Automatically detects the number of speakers.
-    Returns a list of segments with speaker labels.
+    Automatic speaker diarization using pyannote.audio.
     """
     try:
-        # Initialize the pre-trained speaker diarization pipeline
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=os.getenv("HUGGINGFACE_TOKEN"))
+        print("Performing automatic speaker diarization with pyannote.audio...")
+        # Initialize the pipeline
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
+                                           use_auth_token=os.getenv("HUGGINGFACE_TOKEN"))
         
         # Apply the pipeline to the audio file
         diarization = pipeline(audio_file)
-        
+
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append((turn.start, turn.end, speaker))
-        
+
+        num_speakers = len(set([s[2] for s in segments]))
+        print(f"Detected {num_speakers} speaker(s).")
         return segments
 
     except Exception as e:
-        print(f"Speaker diarization failed: {e}")
-        # Fallback to a simple equal-length segmentation
-        audio, sr = sf.read(audio_file)
-        total_duration = len(audio) / sr
-        # Estimate number of speakers using a heuristic or set a default
-        # For simplicity, we'll set it to 2
-        num_speakers = 2
-        segment_duration = total_duration / num_speakers
+        print(f"Automatic speaker diarization failed: {e}")
+        # Fallback to a default single speaker
+        try:
+            y, sr = sf.read(audio_file)
+            return [(0.0, len(y) / sr, "SPEAKER_00")]
+        except Exception as read_error:
+            print(f"Failed to read audio file for fallback: {read_error}")
+            return []
 
-        segments = []
-        for i in range(num_speakers):
-            start = i * segment_duration
-            end = (i + 1) * segment_duration
-            segments.append((start, end, f"Speaker {i + 1}"))
-
-        return segments
 
 def process_segments(audio_file, segments, model, processor, decoder, sampling_rate=16000):
-    speech, sr = sf.read(audio_file)
+    try:
+        speech, sr = sf.read(audio_file)
+    except Exception as e:
+        print(f"Failed to read audio file: {e}")
+        return []
+
     final_transcriptions = []
 
     # Remove duplicate or overlapping segments
@@ -139,7 +141,16 @@ def process_segments(audio_file, segments, model, processor, decoder, sampling_r
         if not unique_segments or segment[0] >= unique_segments[-1][1]:
             unique_segments.append(segment)
 
+    # Map unique speaker IDs to Speaker labels
+    speaker_map = {}
+    current_speaker = 1
+
     for start, end, speaker_id in unique_segments:
+        if speaker_id not in speaker_map:
+            speaker_map[speaker_id] = current_speaker
+            current_speaker += 1
+        speaker_label = f"Speaker {speaker_map[speaker_id]}"
+
         start_sample = int(start * sr)
         end_sample = int(end * sr)
         speech_chunk = speech[start_sample:end_sample]
@@ -147,12 +158,13 @@ def process_segments(audio_file, segments, model, processor, decoder, sampling_r
 
         # Only add non-empty transcripts
         if transcript.strip():
-            final_transcriptions.append((speaker_id, transcript))
+            final_transcriptions.append((speaker_label, transcript))
 
     return final_transcriptions
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Vietnamese End-to-End Speech Recognition with Automatic Speaker Diarization")
+    parser = argparse.ArgumentParser(description="Vietnamese End-to-End Speech Recognition with Speaker Diarization")
     parser.add_argument('--audio', type=str, required=True, help="Path to the audio file")
     args = parser.parse_args()
     audio_file = args.audio
@@ -170,20 +182,22 @@ def main():
     processor, model, lm_file = load_model_and_tokenizer(cache_dir)
     decoder = get_decoder_ngram_model(processor.tokenizer, lm_file)
 
-    # Use the automatic diarization method
+    # Perform automatic diarization
     segments = automatic_speaker_diarization(audio_file)
+    if not segments:
+        print("No segments detected. Exiting.")
+        return
+
     final_transcriptions = process_segments(audio_file, segments, model, processor, decoder)
 
-    # Map unique speaker labels to consistent numbering
-    speaker_mapping = {}
-    current_speaker = 1
-    for speaker_id, _ in final_transcriptions:
-        if speaker_id not in speaker_mapping:
-            speaker_mapping[speaker_id] = f"Speaker {current_speaker}"
-            current_speaker += 1
+    if not final_transcriptions:
+        print("No transcriptions generated.")
+        return
 
-    for speaker_id, transcript in final_transcriptions:
-        print(speaker_mapping[speaker_id] + ":", transcript)
+    print("\nTranscriptions:")
+    for speaker, transcript in final_transcriptions:
+        print(f"{speaker}: {transcript}")
+
 
 if __name__ == '__main__':
     main()
