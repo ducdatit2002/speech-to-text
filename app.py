@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 """
 Vietnamese End-to-End Speech Recognition using Wav2Vec 2.0 with Speaker Diarization.
-Streamlit Application.
+Streamlit Application with merged speaker segments and timestamps.
 """
 
 import os
@@ -17,10 +17,8 @@ from huggingface_hub import hf_hub_download
 import streamlit as st
 import numpy as np
 import librosa
-# from pyAudioAnalysis import audioSegmentation as aS  # Consider alternative if issues persist
-
-# Optional: Use logging for better debugging
 import logging
+
 logging.basicConfig(level=logging.INFO)
 
 @st.cache_resource(show_spinner=False)
@@ -34,22 +32,22 @@ def load_model_and_tokenizer(cache_dir='./cache/'):
         "nguyenvulebinh/wav2vec2-base-vietnamese-250h",
         cache_dir=cache_dir
     )
-    
+
     st.info("Downloading language model...")
     lm_zip_file = hf_hub_download(
         repo_id="nguyenvulebinh/wav2vec2-base-vietnamese-250h",
         filename="vi_lm_4grams.bin.zip",
         cache_dir=cache_dir
     )
-    
+
     st.info("Extracting language model...")
     with zipfile.ZipFile(lm_zip_file, 'r') as zip_ref:
         zip_ref.extractall(cache_dir)
-    
+
     lm_file = os.path.join(cache_dir, 'vi_lm_4grams.bin')
     if not os.path.isfile(lm_file):
         raise FileNotFoundError(f"Language model file not found: {lm_file}")
-    
+
     st.success("Processor, model, and language model loaded successfully.")
     return processor, model, lm_file
 
@@ -59,7 +57,7 @@ def get_decoder_ngram_model(_tokenizer, ngram_lm_path):
     vocab_dict = _tokenizer.get_vocab()
     sorted_vocab = sorted((value, key) for (key, value) in vocab_dict.items())
     vocab_list = [token for _, token in sorted_vocab][:-2]  # Exclude special tokens
-    
+
     alphabet = Alphabet.build_alphabet(vocab_list)
     lm_model = kenlm.Model(ngram_lm_path)
     decoder = BeamSearchDecoderCTC(alphabet, language_model=LanguageModel(lm_model))
@@ -76,12 +74,11 @@ def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
         speech_chunk = librosa.resample(speech_chunk, orig_sr=sampling_rate, target_sr=target_sr)
         sampling_rate = target_sr
 
-    # Define minimum duration (e.g., 0.5 seconds)
     MIN_DURATION = 0.5  # seconds
     MIN_SAMPLES = int(MIN_DURATION * sampling_rate)
 
     if len(speech_chunk) < MIN_SAMPLES:
-        # Pad with zeros (silence) to reach minimum length
+        # Pad with zeros
         padding = MIN_SAMPLES - len(speech_chunk)
         speech_chunk = np.pad(speech_chunk, (0, padding), 'constant')
 
@@ -99,9 +96,6 @@ def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
     return beam_search_output
 
 def alternative_speaker_diarization(audio_file, num_speakers=2):
-    """
-    Alternative speaker diarization method with more robust error handling
-    """
     try:
         # Use librosa to load the audio file
         y, sr = librosa.load(audio_file, sr=None)
@@ -115,7 +109,6 @@ def alternative_speaker_diarization(audio_file, num_speakers=2):
         merged_intervals = []
         for interval in intervals:
             if merged_intervals and (interval[0] - merged_intervals[-1][1]) < MIN_SAMPLES:
-                # Merge with the previous interval
                 merged_intervals[-1][1] = interval[1]
             else:
                 merged_intervals.append([interval[0], interval[1]])
@@ -163,15 +156,47 @@ def process_segments(audio_file, segments, model, processor, decoder, sampling_r
 
         # Only add non-empty transcripts
         if transcript.strip():
-            final_transcriptions.append((f"Speaker {speaker_id + 1}", transcript))
+            # Lưu (start, end, speaker_id, transcript)
+            final_transcriptions.append((start, end, speaker_id, transcript))
 
     return final_transcriptions
 
+def format_timestamp(seconds):
+    # Định dạng thời gian thành MM:SS
+    total_seconds = int(seconds)
+    mm = total_seconds // 60
+    ss = total_seconds % 60
+    return f"{mm:02d}:{ss:02d}"
+
+def merge_speaker_segments(final_transcriptions):
+    # Gộp các đoạn cùng speaker liên tiếp
+    if not final_transcriptions:
+        return []
+
+    merged_results = []
+    prev_start, prev_end, prev_speaker_id, prev_text = final_transcriptions[0]
+
+    for i in range(1, len(final_transcriptions)):
+        start, end, speaker_id, text = final_transcriptions[i]
+        if speaker_id == prev_speaker_id:
+            # Cùng speaker, gộp đoạn
+            prev_end = end
+            prev_text += " " + text
+        else:
+            # Khác speaker
+            merged_results.append((prev_start, prev_end, prev_speaker_id, prev_text))
+            prev_start, prev_end, prev_speaker_id, prev_text = start, end, speaker_id, text
+
+    # Thêm đoạn cuối cùng
+    merged_results.append((prev_start, prev_end, prev_speaker_id, prev_text))
+
+    return merged_results
+
 def main():
-    st.title("🇻🇳 Vietnamese Speech Recognition with Speaker Diarization")
+    st.title("🇻🇳 Vietnamese Speech Recognition with Speaker Diarization (with merging & timestamps)")
 
     st.write("""
-    Upload an audio file, select the number of speakers, and get the transcribed text along with speaker labels.
+    Upload an audio file, select the number of speakers, and get the transcribed text with timestamps and merged segments for each speaker.
     """)
 
     # Sidebar for inputs
@@ -197,7 +222,7 @@ def main():
 
                     # Speaker diarization
                     segments = alternative_speaker_diarization(temp_audio_path, num_speakers=num_speakers)
-                    
+
                     if not segments:
                         st.warning("No speech segments detected.")
                         return
@@ -205,14 +230,20 @@ def main():
                     # Process segments
                     final_transcriptions = process_segments(temp_audio_path, segments, model, processor, decoder)
 
+                    # Merge consecutive segments of the same speaker
+                    merged_results = merge_speaker_segments(final_transcriptions)
+
                     # Display results
-                    if final_transcriptions:
+                    if merged_results:
                         st.success("Transcription Completed!")
                         transcription_text = ""
-                        for speaker, transcript in final_transcriptions:
-                            st.markdown(f"**{speaker}:** {transcript}")
-                            transcription_text += f"{speaker}: {transcript}\n"
-                        
+                        for start_time, end_time, speaker_id, transcript in merged_results:
+                            start_str = format_timestamp(start_time)
+                            end_str = format_timestamp(end_time)
+                            line = f"{start_str} - {end_str} - Speaker {speaker_id + 1}: {transcript}"
+                            st.markdown(line)
+                            transcription_text += line + "\n"
+
                         # Provide download link
                         st.download_button(
                             label="Download Transcription",
