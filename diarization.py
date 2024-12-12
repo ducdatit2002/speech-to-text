@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Vietnamese end-to-end speech recognition using wav2vec 2.0
-with speaker diarization.
+with speaker diarization and timestamps (MM:SS format).
 """
 
 import os
@@ -68,16 +68,12 @@ def transcribe_chunk(model, processor, decoder, speech_chunk, sampling_rate):
         speech_chunk = librosa.resample(speech_chunk, orig_sr=sampling_rate, target_sr=target_sr)
         sampling_rate = target_sr
 
-    # Define minimum duration (e.g., 0.5 seconds)
     MIN_DURATION = 0.5  # seconds
     MIN_SAMPLES = int(MIN_DURATION * sampling_rate)
 
     if len(speech_chunk) < MIN_SAMPLES:
-        # Pad with zeros (silence) to reach minimum length
         padding = MIN_SAMPLES - len(speech_chunk)
         speech_chunk = np.pad(speech_chunk, (0, padding), 'constant')
-        # Optionally, you can skip padding and return an empty string
-        # return ""
 
     input_values = processor(
         speech_chunk, sampling_rate=sampling_rate, return_tensors="pt"
@@ -97,10 +93,7 @@ def alternative_speaker_diarization(audio_file, num_speakers=2):
     Alternative speaker diarization method with more robust error handling
     """
     try:
-        # Use librosa to load the audio file
         y, sr = librosa.load(audio_file, sr=None)
-
-        # Rough segmentation based on energy
         intervals = librosa.effects.split(y, top_db=30)  # Adjust top_db as needed
 
         # Merge very short intervals
@@ -109,12 +102,10 @@ def alternative_speaker_diarization(audio_file, num_speakers=2):
         merged_intervals = []
         for interval in intervals:
             if merged_intervals and (interval[0] - merged_intervals[-1][1]) < MIN_SAMPLES:
-                # Merge with the previous interval
                 merged_intervals[-1][1] = interval[1]
             else:
                 merged_intervals.append([interval[0], interval[1]])
 
-        # Assign speakers cyclically
         segments = []
         for i, (start, end) in enumerate(merged_intervals):
             speaker_id = i % num_speakers
@@ -154,12 +145,16 @@ def process_segments(audio_file, segments, model, processor, decoder, sampling_r
         end_sample = int(end * sr)
         speech_chunk = speech[start_sample:end_sample]
         transcript = transcribe_chunk(model, processor, decoder, speech_chunk, sr)
-
-        # Only add non-empty transcripts
         if transcript.strip():
-            final_transcriptions.append((f"Speaker {speaker_id + 1}", transcript))
-
+            final_transcriptions.append((start, end, speaker_id, transcript))
     return final_transcriptions
+
+def format_timestamp(seconds):
+    # Định dạng thời gian thành MM:SS
+    total_seconds = int(seconds)
+    mm = total_seconds // 60
+    ss = total_seconds % 60
+    return f"{mm:02d}:{ss:02d}"
 
 def main():
     parser = argparse.ArgumentParser(description="Vietnamese End-to-End Speech Recognition with Speaker Diarization")
@@ -181,12 +176,13 @@ def main():
     processor, model, lm_file = load_model_and_tokenizer(cache_dir)
     decoder = get_decoder_ngram_model(processor.tokenizer, lm_file)
 
-    # Use the alternative diarization method
     segments = alternative_speaker_diarization(audio_file, num_speakers=args.num_speakers)
     final_transcriptions = process_segments(audio_file, segments, model, processor, decoder)
 
-    for speaker, transcript in final_transcriptions:
-        print(speaker + ":", transcript)
+    for start_time, end_time, speaker_id, transcript in final_transcriptions:
+        start_str = format_timestamp(start_time)
+        end_str = format_timestamp(end_time)
+        print(f"{start_str} - {end_str} - Speaker {speaker_id + 1}: {transcript}")
 
 if __name__ == '__main__':
     main()
