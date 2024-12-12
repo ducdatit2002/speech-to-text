@@ -179,7 +179,30 @@ def main():
     segments = alternative_speaker_diarization(audio_file, num_speakers=args.num_speakers)
     final_transcriptions = process_segments(audio_file, segments, model, processor, decoder)
 
-    for start_time, end_time, speaker_id, transcript in final_transcriptions:
+    # Bước gộp các đoạn cùng speaker liên tiếp:
+    if not final_transcriptions:
+        return
+
+    merged_results = []
+    # Khởi tạo với đoạn đầu tiên
+    prev_start, prev_end, prev_speaker_id, prev_text = final_transcriptions[0]
+
+    for i in range(1, len(final_transcriptions)):
+        start, end, speaker_id, text = final_transcriptions[i]
+        if speaker_id == prev_speaker_id:
+            # Cùng speaker, gộp đoạn
+            prev_end = end  # cập nhật thời gian kết thúc
+            prev_text += " " + text
+        else:
+            # Khác speaker, in ra speaker trước và reset
+            merged_results.append((prev_start, prev_end, prev_speaker_id, prev_text))
+            prev_start, prev_end, prev_speaker_id, prev_text = start, end, speaker_id, text
+
+    # Thêm đoạn cuối cùng
+    merged_results.append((prev_start, prev_end, prev_speaker_id, prev_text))
+
+    # In kết quả
+    for start_time, end_time, speaker_id, transcript in merged_results:
         start_str = format_timestamp(start_time)
         end_str = format_timestamp(end_time)
         print(f"{start_str} - {end_str} - Speaker {speaker_id + 1}: {transcript}")
