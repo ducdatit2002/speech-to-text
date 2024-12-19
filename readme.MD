@@ -36,3 +36,16 @@ Mở trình duyệt web và truy cập link được cung cấp (thường là h
 3. Ghi chú
 Thư mục ./cache sẽ được sử dụng để lưu trữ model và tokenizer.
 Thư mục ./uploads sẽ được tạo ra và bỏ qua trong git (xem .gitignore). Audio tải lên sẽ được lưu tại đó.
+
+4. Chạy sumary đoạn thoại
+- Khởi động API tóm tắt: Di chuyển đến thư mục llm-summary, cài đặt các thư viện cần thiết, và khởi động API tóm tắt.
+``` bash
+cd llm-summary
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+- Chạy streamlit
+```bash
+streamlit run app.py
+```
+

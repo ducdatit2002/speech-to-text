@@ -18,6 +18,7 @@ import streamlit as st
 import numpy as np
 import librosa
 import logging
+import requests
 
 logging.basicConfig(level=logging.INFO)
 
@@ -244,7 +245,7 @@ def main():
                             st.markdown(line)
                             transcription_text += line + "\n"
 
-                        # Provide download link
+                        # Provide download link for transcription
                         st.download_button(
                             label="Download Transcription",
                             data=transcription_text,
@@ -262,6 +263,23 @@ def main():
                 os.remove(temp_audio_path)
     else:
         st.info("Please upload an audio file to get started.")
+
+    # Thêm task tóm tắt file txt
+    st.header("Summarize a Text File")
+    txt_file = st.file_uploader("Upload a Text File to Summarize", type=["txt"])
+    if txt_file is not None:
+        text_content = txt_file.read().decode('utf-8').strip()
+        if st.button("Summarize Text"):
+            summary_url = "http://0.0.0.0:8000/summarize"  # Thay đổi nếu server chạy ở địa chỉ khác
+            with st.spinner("Summarizing..."):
+                data = {"text": text_content}
+                response = requests.post(summary_url, json=data)
+                if response.status_code == 200:
+                    summary_result = response.json()['summary']
+                    st.write("**Summary:**")
+                    st.write(summary_result)
+                else:
+                    st.write("Error:", response.text)
 
 if __name__ == '__main__':
     main()

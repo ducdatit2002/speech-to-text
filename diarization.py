@@ -179,8 +179,8 @@ def main():
     segments = alternative_speaker_diarization(audio_file, num_speakers=args.num_speakers)
     final_transcriptions = process_segments(audio_file, segments, model, processor, decoder)
 
-    # Bước gộp các đoạn cùng speaker liên tiếp:
     if not final_transcriptions:
+        print("Không có bản phiên âm nào được tạo ra.")
         return
 
     merged_results = []
@@ -201,11 +201,21 @@ def main():
     # Thêm đoạn cuối cùng
     merged_results.append((prev_start, prev_end, prev_speaker_id, prev_text))
 
-    # In kết quả
+    # Tạo full_transcript
+    full_transcript = ""
     for start_time, end_time, speaker_id, transcript in merged_results:
         start_str = format_timestamp(start_time)
         end_str = format_timestamp(end_time)
-        print(f"{start_str} - {end_str} - Speaker {speaker_id + 1}: {transcript}")
+        line = f"{start_str} - {end_str} - Speaker {speaker_id + 1}: {transcript}"
+        full_transcript += line + "\n"
+        print(line)
+
+    # Lưu kết quả vào file txt có cùng tên với file input
+    output_filename = audio_file + ".txt"
+    with open(output_filename, "w", encoding="utf-8") as f:
+        f.write(full_transcript)
+
+    print(f"Đã lưu phiên âm vào file: {output_filename}")
 
 if __name__ == '__main__':
     main()
